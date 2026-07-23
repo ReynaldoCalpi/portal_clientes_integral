@@ -69,28 +69,28 @@ def create_zip_buffer(json_list, pdf_list):
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
-def calcular_empleado_quincenal(salario_mensual, h_diurnas, h_nocturnas, tipo_regimen, valor_fijo_custom=0.0):
-    """Calcula horas extras, ISSS, AFP, Renta quincenal por tramos y líquido a pagar."""
+def calcular_empleado_quincenal(salario_mensual, comisiones, h_diurnas, h_nocturnas, otras_deducciones, tipo_regimen, valor_fijo_custom=0.0):
+    """Calcula subtotal, ISSS, AFP, Renta quincenal según fórmula exacta y líquido a pagar."""
     tarifa_hora = (salario_mensual / 30.0) / 8.0
     
     pago_diurnas = h_diurnas * tarifa_hora * 2.0
     pago_nocturnas = h_nocturnas * tarifa_hora * 2.25
     
     salario_quincenal_base = salario_mensual / 2.0
-    total_gravable = salario_quincenal_base + pago_diurnas + pago_nocturnas
+    total_gravable = salario_quincenal_base + comisiones + pago_diurnas + pago_nocturnas
     
-    # ISSS Empleado: 3% con tope quincenal de $15.00 ($30 mensuales)
+    # ISSS Empleado: 3% con tope quincenal de $15.00
     isss = min(total_gravable * 0.03, 15.00)
     
-    # AFP Empleado: 7.25% (Tope quincenal basado en $7,045.06 mensual / 2)
+    # AFP Empleado: 7.25%
     afp = min(total_gravable * 0.0725, 7045.06 / 2.0)
     
-    # Base gravable para Renta (después de deducir ISSS y AFP)
+    # Base gravable para Renta (equivalente a L8 - M8 - N8)
     base_renta = total_gravable - isss - afp
     if base_renta < 0:
         base_renta = 0.0
         
-    # Renta Quincenal según tablas oficiales de El Salvador
+    # Renta Quincenal según la fórmula exacta de tramos
     if tipo_regimen == "Eventual (10%)":
         renta = total_gravable * 0.10
     elif tipo_regimen == "Renta Fija":
@@ -114,16 +114,18 @@ def calcular_empleado_quincenal(salario_mensual, h_diurnas, h_nocturnas, tipo_re
     else:
         codigo_fiscal = "CÓDIGO 01"
         
-    liquido = total_gravable - isss - afp - renta
+    liquido = total_gravable - isss - afp - renta - otras_deducciones
     
     return {
         "salario_quincenal": salario_quincenal_base,
+        "comisiones": comisiones,
         "pago_diurnas": pago_diurnas,
         "pago_nocturnas": pago_nocturnas,
         "total_gravable": total_gravable,
         "isss": isss,
         "afp": afp,
         "renta": renta,
+        "otras_deducciones": otras_deducciones,
         "codigo_fiscal": codigo_fiscal,
         "liquido": liquido
     }
@@ -344,28 +346,42 @@ def client_dashboard():
                 st.dataframe(pd.DataFrame(existing_payroll['items']), use_container_width=True)
             else:
                 with st.form("payroll_generation_form"):
-                    st.markdown("Ingrese las **Horas Extras Diurnas (200% / Dobles)** y **Horas Nocturnas (225%)** trabajadas en esta quincena:")
+                    st.markdown("Ingrese **Comisiones**, **Horas Extras Diurnas (200%)**, **Horas Nocturnas (225%)** y **Otras Deducciones** para esta quincena:")
                     
                     emp_inputs = {}
                     for emp in my_emps:
                         sal_quincenal_base = emp['salario_base'] / 2.0
-                        st.markdown(f"**{emp['nombre']}** (Base Quincenal Estimada: **${sal_quincenal_base:,.2f}**)")
-                        col_h1, col_h2 = st.columns(2)
-                        with col_h1:
+                        st.markdown(f"**{emp['nombre']}** (Base Quincenal: **${sal_quincenal_base:,.2f}**)")
+                        
+                        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+                        with col_c1:
+                            comisiones = st.number_input(f"Comisiones ({emp['dui']})", min_value=0.0, value=0.0, step=10.0, key=f"com_{emp['dui']}")
+                        with col_c2:
                             h_diurnas = st.number_input(f"Hrs Diurnas 200% ({emp['dui']})", min_value=0.0, value=0.0, step=0.5, key=f"hd_{emp['dui']}")
-                        with col_h2:
+                        with col_c3:
                             h_nocturnas = st.number_input(f"Hrs Nocturnas 225% ({emp['dui']})", min_value=0.0, value=0.0, step=0.5, key=f"hn_{emp['dui']}")
-                        emp_inputs[emp['dui']] = {"diurnas": h_diurnas, "nocturnas": h_nocturnas}
+                        with col_c4:
+                            otras_ded = st.number_input(f"Otras Deduc. ({emp['dui']})", min_value=0.0, value=0.0, step=5.0, key=f"od_{emp['dui']}")
+                            
+                        emp_inputs[emp['dui']] = {
+                            "comisiones": comisiones,
+                            "diurnas": h_diurnas,
+                            "nocturnas": h_nocturnas,
+                            "otras_deducciones": otras_ded
+                        }
                         st.divider()
                     
                     submitted_payroll = st.form_submit_button("⚡ CALCULAR Y EMITIR PLANILLA QUINCENAL", type="primary")
                     if submitted_payroll:
                         planilla_items = []
                         for emp in my_emps:
+                            inputs = emp_inputs[emp['dui']]
                             res = calcular_empleado_quincenal(
                                 emp['salario_base'],
-                                emp_inputs[emp['dui']]["diurnas"],
-                                emp_inputs[emp['dui']]["nocturnas"],
+                                inputs["comisiones"],
+                                inputs["diurnas"],
+                                inputs["nocturnas"],
+                                inputs["otras_deducciones"],
                                 emp['regimen'],
                                 emp.get('renta_fija', 0.0)
                             )
@@ -373,14 +389,15 @@ def client_dashboard():
                             planilla_items.append({
                                 "EMPLEADO": emp['nombre'],
                                 "DUI": emp['dui'],
-                                "SALARIO QUINCENAL": f"${res['salario_quincenal']:,.2f}",
+                                "SUELDO QUINCENAL": f"${res['salario_quincenal']:,.2f}",
+                                "COMISIONES": f"${res['comisiones']:,.2f}",
                                 "HRS DIURNAS (200%)": f"${res['pago_diurnas']:,.2f}",
                                 "HRS NOCTURNAS (225%)": f"${res['pago_nocturnas']:,.2f}",
                                 "TOTAL GRAVABLE": f"${res['total_gravable']:,.2f}",
                                 "ISSS (3%)": f"${res['isss']:,.2f}",
                                 "AFP (7.25%)": f"${res['afp']:,.2f}",
-                                "RÉGIMEN": emp['regimen'],
                                 "RENTA": f"${res['renta']:,.2f}",
+                                "OTRAS DEDUCCIONES": f"${res['otras_deducciones']:,.2f}",
                                 "CÓDIGO FISCAL": res['codigo_fiscal'],
                                 "LÍQUIDO A PAGAR": f"${res['liquido']:,.2f}"
                             })
