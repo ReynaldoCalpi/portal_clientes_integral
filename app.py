@@ -79,16 +79,12 @@ def calcular_renta_elsalvador(salario_gravable, tipo_regimen, valor_fijo_custom=
         return 0.0
     
     # Cálculo por Tramos Ley (El Salvador) sobre excedentes estimados mensuales
-    # Tramo I: 0.01 - 472.00 (Exento -> Código 60)
     if salario_gravable <= 472.00:
         return 0.0
-    # Tramo II: 472.01 - 895.24 (10% sobre exceso + 17.67)
     elif salario_gravable <= 895.24:
         return ((salario_gravable - 472.00) * 0.10) + 17.67
-    # Tramo III: 895.25 - 2,038.10 (20% sobre exceso + 60.00)
     elif salario_gravable <= 2038.10:
         return ((salario_gravable - 895.24) * 0.20) + 60.00
-    # Tramo IV: Mayor a 2,038.10 (30% sobre exceso + 288.57)
     else:
         return ((salario_gravable - 2038.10) * 0.30) + 288.57
 
@@ -230,7 +226,6 @@ def admin_dashboard():
                 with st.expander(f"🏢 Empresa: {payroll['client_name']} — Periodo: {payroll['periodo']} (Creada: {payroll['fecha_creacion']})"):
                     df_p = pd.DataFrame(payroll['items'])
                     
-                    # Totales consolidados para declaración
                     total_c01 = df_p[df_p['Codigo_Fiscal'] == 'Código 01']['Renta'].sum()
                     total_c60 = df_p[df_p['Codigo_Fiscal'] == 'Código 60']['Salario_Bruto'].sum()
                     total_eventual = df_p[df_p['Codigo_Fiscal'] == 'Eventual 10%']['Renta'].sum()
@@ -318,7 +313,6 @@ def client_dashboard():
         st.subheader("💼 Mantenimiento de Personal y Generación de Planilla")
         st.markdown("Mantén tu base histórica de empleados y emite tu planilla mensual con cálculos automáticos de Renta (**Código 01**, **Código 60** y **10% Eventual**).")
         
-        # Gestión de Empleados Históricos
         all_emps = load_json_db(EMPLOYEE_DB_FILE)
         my_emps = [e for e in all_emps if e.get("user_id") == current_user_id]
         
@@ -332,7 +326,6 @@ def client_dashboard():
                 
                 if st.form_submit_button("Guardar Empleado"):
                     if e_nombre and e_dui:
-                        # Reemplazar si ya existe DUI
                         new_list = [e for e in all_emps if not (e.get("user_id") == current_user_id and e.get("dui") == e_dui)]
                         new_list.append({
                             "user_id": current_user_id, "nombre": e_nombre, "dui": e_dui,
@@ -357,10 +350,8 @@ def client_dashboard():
                     sal_base = emp['salario_base']
                     regimen = emp['regimen']
                     
-                    # Cálculo de renta automatizado
                     renta = calcular_renta_elsalvador(sal_base, regimen, emp.get('renta_fija', 0.0))
                     
-                    # Asignación de Código Fiscal
                     if regimen == "Exento / Código 60" or (regimen == "Cálculo por Tramos de Ley" and sal_base <= 472.00):
                         codigo_fiscal = "Código 60"
                     elif regimen == "Eventual (10%)":
@@ -380,9 +371,7 @@ def client_dashboard():
                         "Liquido_Pagar": round(liquido, 2)
                     })
                     
-                # Guardar planilla generada
                 all_payrolls = load_json_db(PAYROLL_DB_FILE)
-                # Remover si ya existe para este periodo
                 all_payrolls = [p for p in all_payrolls if not (p.get("user_id") == current_user_id and p.get("periodo") == periodo_str)]
                 
                 new_payroll_record = {
@@ -402,7 +391,7 @@ def client_dashboard():
     with client_tab3:
         st.subheader("📊 Historial de Envíos y Planillas del Periodo")
         all_p = load_json_db(PAYROLL_DB_FILE)
-        my_p = [p for p in all_p if p.get("user_id"] == current_user_id]
+        my_p = [p for p in all_p if p.get("user_id") == current_user_id]
         if my_p:
             for p in my_p:
                 with st.expander(f"Periodo: {p['periodo']} — Emitida el {p['fecha_creacion']}"):
