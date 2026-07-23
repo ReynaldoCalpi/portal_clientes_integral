@@ -5,6 +5,9 @@ import json
 import os
 import io
 import zipfile
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Configuración de la página
 st.set_page_config(
@@ -68,6 +71,162 @@ def create_zip_buffer(json_list, pdf_list):
                 zip_file.write(file_info['path'], arcname=file_info['name'])
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
+
+def create_excel_payroll_buffer(client_name, periodo_str, items_list):
+    """Genera un archivo Excel (.xlsx) con diseño profesional, formatos de moneda y fórmulas."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Planilla Quincenal"
+    ws.views.sheetView[0].showGridLines = True
+
+    HEADER_FILL = PatternFill(start_color="1B365D", end_color="1B365D", fill_type="solid")
+    HEADER_FONT = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    TITLE_FONT = Font(name="Arial", size=16, bold=True, color="1B365D")
+    SUBTITLE_FONT = Font(name="Arial", size=11, italic=True, color="555555")
+    DATA_FONT = Font(name="Arial", size=10)
+    TOTAL_FONT = Font(name="Arial", size=10, bold=True)
+    TOTAL_FILL = PatternFill(start_color="EAECEE", end_color="EAECEE", fill_type="solid")
+    ZEBRA_FILL = PatternFill(start_color="F4F6F9", end_color="F4F6F9", fill_type="solid")
+
+    thin_border = Border(
+        left=Side(style='thin', color='D3D3D3'),
+        right=Side(style='thin', color='D3D3D3'),
+        top=Side(style='thin', color='D3D3D3'),
+        bottom=Side(style='thin', color='D3D3D3')
+    )
+    total_border = Border(
+        top=Side(style='thin', color='000000'),
+        bottom=Side(style='double', color='000000'),
+        left=Side(style='thin', color='D3D3D3'),
+        right=Side(style='thin', color='D3D3D3')
+    )
+
+    ws['A1'] = "RI CONSULTORES — PLANILLA DE PAGO QUINCENAL"
+    ws['A1'].font = TITLE_FONT
+    ws['A2'] = f"Periodo: {periodo_str} | Empresa: {client_name}"
+    ws['A2'].font = SUBTITLE_FONT
+
+    ws.append([]) # Fila 3 en blanco
+
+    headers = [
+        "No.", "Empleado", "DUI", "Sueldo Quincenal", "Comisiones", 
+        "Hrs Diurnas (200%)", "Hrs Nocturnas (225%)", "Total Gravable", 
+        "ISSS (3%)", "AFP (7.25%)", "Renta", "Otras Deduc.", 
+        "Código Fiscal", "Líquido a Pagar"
+    ]
+    ws.append(headers)
+
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=4, column=col_idx)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = thin_border
+    ws.row_dimensions[4].height = 28
+
+    currency_format = "$#,##0.00"
+
+    def clean_val(v):
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            try:
+                return float(v.replace("$", "").replace(",", ""))
+            except:
+                return 0.0
+        return 0.0
+
+    for idx, item in enumerate(items_list, start=1):
+        sq = clean_val(item.get("SUELDO QUINCENAL", 0))
+        com = clean_val(item.get("COMISIONES", 0))
+        h_d = clean_val(item.get("HRS DIURNAS (200%)", 0))
+        h_n = clean_val(item.get("HRS NOCTURNAS (225%)", 0))
+        tot_g = clean_val(item.get("TOTAL GRAVABLE", 0))
+        isss = clean_val(item.get("ISSS (3%)", 0))
+        afp = clean_val(item.get("AFP (7.25%)", 0))
+        renta = clean_val(item.get("RENTA", 0))
+        otras = clean_val(item.get("OTRAS DEDUCCIONES", 0))
+        liq = clean_val(item.get("LÍQUIDO A PAGAR", 0))
+
+        row_data = [
+            idx,
+            item.get("EMPLEADO", ""),
+            item.get("DUI", ""),
+            sq, com, h_d, h_n, tot_g, isss, afp, renta, otras,
+            item.get("CÓDIGO FISCAL", "CÓDIGO 01"),
+            liq
+        ]
+        ws.append(row_data)
+        row_idx = 4 + idx
+        is_zebra = (row_idx % 2 == 0)
+        
+        for col_idx in range(1, len(row_data) + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.font = DATA_FONT
+            cell.border = thin_border
+            if is_zebra:
+                cell.fill = ZEBRA_FILL
+            
+            if col_idx in [1]:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif col_idx in [2, 3, 13]:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                cell.number_format = currency_format
+        ws.row_dimensions[row_idx].height = 20
+
+    start_r = 5
+    end_r = 4 + len(items_list)
+    total_row_idx = end_r + 1
+
+    totals_formula = [
+        "TOTALES", "", "",
+        f"=SUM(D{start_r}:D{end_r})",
+        f"=SUM(E{start_r}:E{end_r})",
+        f"=SUM(F{start_r}:F{end_r})",
+        f"=SUM(G{start_r}:G{end_r})",
+        f"=SUM(H{start_r}:H{end_r})",
+        f"=SUM(I{start_r}:I{end_r})",
+        f"=SUM(J{start_r}:J{end_r})",
+        f"=SUM(K{start_r}:K{end_r})",
+        f"=SUM(L{start_r}:L{end_r})",
+        "",
+        f"=SUM(N{start_r}:N{end_r})"
+    ]
+
+    ws.append(totals_formula)
+    ws.row_dimensions[total_row_idx].height = 22
+
+    for col_idx in range(1, len(totals_formula) + 1):
+        cell = ws.cell(row=total_row_idx, column=col_idx)
+        cell.font = TOTAL_FONT
+        cell.fill = TOTAL_FILL
+        cell.border = total_border
+        if col_idx in [4, 5, 6, 7, 8, 9, 10, 11, 12, 14]:
+            cell.number_format = currency_format
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+        elif col_idx == 1:
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+        else:
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            if cell.row < 4:
+                continue
+            val_str = str(cell.value or '')
+            if val_str.startswith('='):
+                val_str = "$999,999.00"
+            max_len = max(max_len, len(val_str))
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+    excel_buffer = io.BytesIO()
+    wb.save(excel_buffer)
+    excel_buffer.seek(0)
+    return excel_buffer.getvalue()
 
 def calcular_empleado_quincenal(salario_mensual, comisiones, h_diurnas, h_nocturnas, otras_deducciones, tipo_regimen):
     """Calcula subtotal, ISSS, AFP, Renta quincenal según fórmula exacta de tramos y líquido a pagar."""
@@ -219,6 +378,18 @@ def admin_dashboard():
                     df_p = pd.DataFrame(payroll['items'])
                     st.dataframe(df_p, use_container_width=True)
                     
+                    # Botón de descarga Excel en Admin
+                    excel_data = create_excel_payroll_buffer(payroll['client_name'], payroll['periodo'], payroll['items'])
+                    safe_c_name = payroll['client_name'].replace(" ", "_")
+                    safe_p_name = payroll['periodo'].replace(" ", "_").replace("—", "-")
+                    st.download_button(
+                        label="📊 DESCARGAR PLANILLA EN EXCEL (PROFESIONAL)",
+                        data=excel_data,
+                        file_name=f"Planilla_{safe_c_name}_{safe_p_name}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"adm_excel_{p_idx}"
+                    )
+                    
                     if st.button(f"🗑️ [ADMIN] ELIMINAR ESTA PLANILLA", key=f"adm_del_{p_idx}", type="primary"):
                         updated_payrolls = [p for p in payrolls if not (p.get("user_id") == payroll['user_id'] and p.get("periodo") == payroll['periodo'])]
                         save_json_db(PAYROLL_DB_FILE, updated_payrolls)
@@ -315,7 +486,6 @@ def client_dashboard():
                 
                 if st.form_submit_button("GUARDAR EMPLEADO"):
                     if e_nombre and e_dui:
-                        # Corregido el cierre de paréntesis en e.get("dui")
                         new_list = [e for e in all_emps if not (e.get("user_id") == current_user_id and e.get("dui") == e_dui)]
                         new_list.append({
                             "user_id": current_user_id, "nombre": e_nombre, "dui": e_dui,
@@ -343,19 +513,29 @@ def client_dashboard():
             if existing_payroll:
                 is_enviado = existing_payroll.get("enviado", False)
                 
+                st.dataframe(pd.DataFrame(existing_payroll['items']), use_container_width=True)
+                
+                # Botón de Descarga Excel Profesional para el Cliente
+                excel_data = create_excel_payroll_buffer(st.session_state.username, periodo_str, existing_payroll['items'])
+                safe_p_name = periodo_str.replace(" ", "_").replace("—", "-")
+                st.download_button(
+                    label="📊 DESCARGAR PLANILLA EN EXCEL (FORMATO PROFESIONAL)",
+                    data=excel_data,
+                    file_name=f"Planilla_{st.session_state.username.replace(' ', '_')}_{safe_p_name}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                
                 if is_enviado:
-                    st.info("🔒 **Planilla enviada oficialmente a RI Consultores.** Ya no puede ser modificada ni eliminada por ti. Si necesitas corregir algo, contacta al despacho.")
-                    st.dataframe(pd.DataFrame(existing_payroll['items']), use_container_width=True)
+                    st.info("🔒 **Planilla enviada oficialmente a RI Consultores.** Ya no puede ser modificada ni eliminada por ti.")
                 else:
-                    st.warning("⚠️ Tienes esta planilla guardada como **BORRADOR** (Aún no enviada a RI Consultores). Puedes eliminarla o enviarla.")
-                    st.dataframe(pd.DataFrame(existing_payroll['items']), use_container_width=True)
-                    
+                    st.warning("⚠️ Tienes esta planilla guardada como **BORRADOR** (Aún no enviada).")
                     col_b1, col_b2 = st.columns(2)
                     with col_b1:
                         if st.button("🗑️ ELIMINAR BORRADOR DE PLANILLA", type="secondary"):
                             all_payrolls = [p for p in all_payrolls if not (p.get("user_id") == current_user_id and p.get("periodo") == periodo_str)]
                             save_json_db(PAYROLL_DB_FILE, all_payrolls)
-                            st.success("Borrador eliminado correctamente. Ya puedes generar una nueva.")
+                            st.success("Borrador eliminado correctamente.")
                             st.rerun()
                     with col_b2:
                         if st.button("🚀 ENVIAR PLANILLA A RI CONSULTORES", type="primary"):
@@ -364,11 +544,11 @@ def client_dashboard():
                                     p["enviado"] = True
                                     p["fecha_envio"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                             save_json_db(PAYROLL_DB_FILE, all_payrolls)
-                            st.success("¡Planilla enviada a RI Consultores exitosamente! Ya ha quedado registrada y bloqueada.")
+                            st.success("¡Planilla enviada a RI Consultores exitosamente!")
                             st.rerun()
             else:
                 with st.form("payroll_generation_form"):
-                    st.markdown("Ingrese **Comisiones**, **Horas Extras Diurnas (200%)**, **Horas Nocturnas (225%)** y **Otras Deducciones** para esta quincena:")
+                    st.markdown("Ingrese **Comisiones**, **Horas Extras Diurnas (200%)**, **Horas Nocturnas (225%)** y **Otras Deducciones**:")
                     
                     emp_inputs = {}
                     for emp in my_emps:
@@ -433,20 +613,30 @@ def client_dashboard():
                         }
                         all_payrolls.append(new_payroll_record)
                         save_json_db(PAYROLL_DB_FILE, all_payrolls)
-                        st.success("¡Planilla guardada como borrador! Ahora puedes revisarla y enviarla a RI Consultores.")
+                        st.success("¡Planilla guardada como borrador!")
                         st.rerun()
         else:
-            st.info("Registra al menos un empleado en la base histórica superior para poder generar la planilla.")
+            st.info("Registra al menos un empleado en la base histórica superior.")
 
     with client_tab3:
         st.subheader("📊 HISTORIAL DE PLANILLAS QUINCENALES")
         all_p = load_json_db(PAYROLL_DB_FILE)
         my_p = [p for p in all_p if p.get("user_id") == current_user_id]
         if my_p:
-            for p in my_p:
+            for h_idx, p in enumerate(my_p):
                 estado_txt = "ENVIADA A RI CONSULTORES" if p.get("enviado", False) else "BORRADOR"
                 with st.expander(f"Periodo: {p['periodo']} — Estado: [{estado_txt}] (Creada: {p['fecha_creacion']})"):
                     st.dataframe(pd.DataFrame(p['items']), use_container_width=True)
+                    
+                    excel_data = create_excel_payroll_buffer(st.session_state.username, p['periodo'], p['items'])
+                    safe_p_name = p['periodo'].replace(" ", "_").replace("—", "-")
+                    st.download_button(
+                        label="📊 DESCARGAR ESTA PLANILLA EN EXCEL",
+                        data=excel_data,
+                        file_name=f"Planilla_{st.session_state.username.replace(' ', '_')}_{safe_p_name}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"hist_excel_{h_idx}"
+                    )
         else:
             st.warning("No hay planillas registradas todavía.")
 
