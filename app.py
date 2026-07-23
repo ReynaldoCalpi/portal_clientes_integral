@@ -319,7 +319,7 @@ def client_dashboard():
                 
                 if st.form_submit_button("GUARDAR EMPLEADO"):
                     if e_nombre and e_dui:
-                        new_list = [e for e in all_emps if not (e.get("user_id") == current_user_id and e.get("dui"] == e_dui)]
+                        new_list = [e for e in all_emps if not (e.get("user_id") == current_user_id and e.get("dui") == e_dui)]
                         new_list.append({
                             "user_id": current_user_id, "nombre": e_nombre, "dui": e_dui,
                             "salario_base": e_salario, "regimen": e_regimen, "renta_fija": e_fijo_val
