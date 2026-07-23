@@ -311,11 +311,11 @@ def client_dashboard():
                 e_nombre = st.text_input("NOMBRE COMPLETO DEL EMPLEADO")
                 e_dui = st.text_input("DUI / IDENTIFICACIÓN")
                 e_salario = st.number_input("SALARIO BASE MENSUAL ($)", min_value=0.0, value=500.0, step=10.0)
-                # Removida la opción de renta fija; se mantiene únicamente el cálculo legal o excepciones automáticas
                 e_regimen = st.selectbox("RÉGIMEN DE RETENCIÓN DE RENTA", ["Cálculo por Tramos de Ley", "Exento / Código 60", "Eventual (10%)"])
                 
                 if st.form_submit_button("GUARDAR EMPLEADO"):
                     if e_nombre and e_dui:
+                        # Corregido el cierre de paréntesis en e.get("dui")
                         new_list = [e for e in all_emps if not (e.get("user_id") == current_user_id and e.get("dui") == e_dui)]
                         new_list.append({
                             "user_id": current_user_id, "nombre": e_nombre, "dui": e_dui,
@@ -338,7 +338,7 @@ def client_dashboard():
             st.subheader(f"GESTIÓN DE PLANILLA PARA EL PERIODO: {periodo_str}")
             
             all_payrolls = load_json_db(PAYROLL_DB_FILE)
-            existing_payroll = next((p for p in all_payrolls if p.get("user_id") == current_user_id and p.get("periodo"] == periodo_str), None)
+            existing_payroll = next((p for p in all_payrolls if p.get("user_id") == current_user_id and p.get("periodo") == periodo_str), None)
             
             if existing_payroll:
                 is_enviado = existing_payroll.get("enviado", False)
