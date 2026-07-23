@@ -69,7 +69,7 @@ def create_zip_buffer(json_list, pdf_list):
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
-def calcular_empleado_quincenal(salario_mensual, comisiones, h_diurnas, h_nocturnas, otras_deducciones, tipo_regimen, valor_fijo_custom=0.0):
+def calcular_empleado_quincenal(salario_mensual, comisiones, h_diurnas, h_nocturnas, otras_deducciones, tipo_regimen):
     """Calcula subtotal, ISSS, AFP, Renta quincenal según fórmula exacta de tramos y líquido a pagar."""
     tarifa_hora = (salario_mensual / 30.0) / 8.0
     
@@ -85,16 +85,14 @@ def calcular_empleado_quincenal(salario_mensual, comisiones, h_diurnas, h_noctur
     # AFP Empleado: 7.25%
     afp = min(total_gravable * 0.0725, 7045.06 / 2.0)
     
-    # Base gravable para Renta (Equivalente a L8 - M8 - N8)
+    # Base gravable para Renta
     base_renta = total_gravable - isss - afp
     if base_renta < 0:
         base_renta = 0.0
         
-    # Renta Quincenal exacta según fórmula de tramos de Excel
+    # Renta Quincenal exacta según fórmula de tramos de Ley
     if tipo_regimen == "Eventual (10%)":
         renta = total_gravable * 0.10
-    elif tipo_regimen == "Renta Fija":
-        renta = float(valor_fijo_custom)
     elif tipo_regimen == "Exento / Código 60":
         renta = 0.0
     else:
@@ -221,7 +219,6 @@ def admin_dashboard():
                     df_p = pd.DataFrame(payroll['items'])
                     st.dataframe(df_p, use_container_width=True)
                     
-                    # Botón exclusivo para Admin para borrar cualquier planilla y ordenar su pantalla
                     if st.button(f"🗑️ [ADMIN] ELIMINAR ESTA PLANILLA", key=f"adm_del_{p_idx}", type="primary"):
                         updated_payrolls = [p for p in payrolls if not (p.get("user_id") == payroll['user_id'] and p.get("periodo") == payroll['periodo'])]
                         save_json_db(PAYROLL_DB_FILE, updated_payrolls)
@@ -314,15 +311,15 @@ def client_dashboard():
                 e_nombre = st.text_input("NOMBRE COMPLETO DEL EMPLEADO")
                 e_dui = st.text_input("DUI / IDENTIFICACIÓN")
                 e_salario = st.number_input("SALARIO BASE MENSUAL ($)", min_value=0.0, value=500.0, step=10.0)
-                e_regimen = st.selectbox("RÉGIMEN DE RETENCIÓN DE RENTA", ["Cálculo por Tramos de Ley", "Exento / Código 60", "Renta Fija", "Eventual (10%)"])
-                e_fijo_val = st.number_input("VALOR RENTA FIJA QUINCENAL (Si aplica)", min_value=0.0, value=0.0)
+                # Removida la opción de renta fija; se mantiene únicamente el cálculo legal o excepciones automáticas
+                e_regimen = st.selectbox("RÉGIMEN DE RETENCIÓN DE RENTA", ["Cálculo por Tramos de Ley", "Exento / Código 60", "Eventual (10%)"])
                 
                 if st.form_submit_button("GUARDAR EMPLEADO"):
                     if e_nombre and e_dui:
                         new_list = [e for e in all_emps if not (e.get("user_id") == current_user_id and e.get("dui") == e_dui)]
                         new_list.append({
                             "user_id": current_user_id, "nombre": e_nombre, "dui": e_dui,
-                            "salario_base": e_salario, "regimen": e_regimen, "renta_fija": e_fijo_val
+                            "salario_base": e_salario, "regimen": e_regimen
                         })
                         save_json_db(EMPLOYEE_DB_FILE, new_list)
                         st.success(f"Empleado {e_nombre} guardado correctamente.")
@@ -341,7 +338,7 @@ def client_dashboard():
             st.subheader(f"GESTIÓN DE PLANILLA PARA EL PERIODO: {periodo_str}")
             
             all_payrolls = load_json_db(PAYROLL_DB_FILE)
-            existing_payroll = next((p for p in all_payrolls if p.get("user_id") == current_user_id and p.get("periodo") == periodo_str), None)
+            existing_payroll = next((p for p in all_payrolls if p.get("user_id") == current_user_id and p.get("periodo"] == periodo_str), None)
             
             if existing_payroll:
                 is_enviado = existing_payroll.get("enviado", False)
@@ -407,8 +404,7 @@ def client_dashboard():
                                 inputs["diurnas"],
                                 inputs["nocturnas"],
                                 inputs["otras_deducciones"],
-                                emp['regimen'],
-                                emp.get('renta_fija', 0.0)
+                                emp['regimen']
                             )
                             
                             planilla_items.append({
