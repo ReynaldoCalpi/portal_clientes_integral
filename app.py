@@ -41,7 +41,7 @@ def save_files_to_folder(file_list, client_name, periodo_str, category):
         return saved_files_info
         
     safe_client = client_name.replace(" ", "_").replace(".", "")
-    safe_periodo = periodo_str.replace(" ", "_")
+    safe_periodo = periodo_str.replace(" ", "_").replace("—", "-")
     folder_path = os.path.join(UPLOAD_DIR, safe_client, safe_periodo, category)
     os.makedirs(folder_path, exist_ok=True)
     
@@ -69,74 +69,64 @@ def create_zip_buffer(json_list, pdf_list):
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
-def calcular_renta_elsalvador(salario_gravable, tipo_regimen, valor_fijo_custom=0.0):
-    """Calcula la renta según los tramos de ley vigentes en El Salvador o regímenes especiales."""
+def calcular_empleado_quincenal(salario_mensual, h_diurnas, h_nocturnas, tipo_regimen, valor_fijo_custom=0.0):
+    """Calcula horas extras, ISSS, AFP, Renta quincenal por tramos y líquido a pagar."""
+    tarifa_hora = (salario_mensual / 30.0) / 8.0
+    
+    pago_diurnas = h_diurnas * tarifa_hora * 2.0
+    pago_nocturnas = h_nocturnas * tarifa_hora * 2.25
+    
+    salario_quincenal_base = salario_mensual / 2.0
+    total_gravable = salario_quincenal_base + pago_diurnas + pago_nocturnas
+    
+    # ISSS Empleado: 3% con tope quincenal de $15.00 ($30 mensuales)
+    isss = min(total_gravable * 0.03, 15.00)
+    
+    # AFP Empleado: 7.25% (Tope quincenal basado en $7,045.06 mensual / 2)
+    afp = min(total_gravable * 0.0725, 7045.06 / 2.0)
+    
+    # Base gravable para Renta (después de deducir ISSS y AFP)
+    base_renta = total_gravable - isss - afp
+    if base_renta < 0:
+        base_renta = 0.0
+        
+    # Renta Quincenal según tablas oficiales de El Salvador
     if tipo_regimen == "Eventual (10%)":
-        return salario_gravable * 0.10
+        renta = total_gravable * 0.10
     elif tipo_regimen == "Renta Fija":
-        return float(valor_fijo_custom)
+        renta = float(valor_fijo_custom)
     elif tipo_regimen == "Exento / Código 60":
-        return 0.0
-    
-    # Cálculo por Tramos Ley (El Salvador) sobre excedentes estimados mensuales
-    if salario_gravable <= 472.00:
-        return 0.0
-    elif salario_gravable <= 895.24:
-        return ((salario_gravable - 472.00) * 0.10) + 17.67
-    elif salario_gravable <= 2038.10:
-        return ((salario_gravable - 895.24) * 0.20) + 60.00
+        renta = 0.0
     else:
-        return ((salario_gravable - 2038.10) * 0.30) + 288.57
-
-def extract_invoice_summary(file_list):
-    summary_data = []
-    if not file_list:
-        return pd.DataFrame()
+        if base_renta <= 275.00:
+            renta = 0.0
+        elif base_renta <= 447.62:
+            renta = ((base_renta - 275.00) * 0.10) + 8.83
+        elif base_renta <= 1019.05:
+            renta = ((base_renta - 447.62) * 0.20) + 30.00
+        else:
+            renta = ((base_renta - 1019.05) * 0.30) + 144.28
+            
+    if tipo_regimen == "Exento / Código 60" or (tipo_regimen == "Cálculo por Tramos de Ley" and base_renta <= 275.00):
+        codigo_fiscal = "CÓDIGO 60"
+    elif tipo_regimen == "Eventual (10%)":
+        codigo_fiscal = "EVENTUAL 10%"
+    else:
+        codigo_fiscal = "CÓDIGO 01"
+        
+    liquido = total_gravable - isss - afp - renta
     
-    for file_info in file_list:
-        path = file_info.get("path")
-        if path and os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8-sig") as f:
-                    content = json.load(f)
-                
-                items = content if isinstance(content, list) else [content]
-                for item in items:
-                    doc_num = None
-                    nc_root = item.get("numeroControl")
-                    if nc_root and str(nc_root).startswith("DTE-03"):
-                        doc_num = nc_root
-                        
-                    ident = item.get("identificacion", {})
-                    if not doc_num and isinstance(ident, dict):
-                        nc_ident = ident.get("numeroControl")
-                        if nc_ident and str(nc_ident).startswith("DTE-03"):
-                            doc_num = nc_ident
-                                
-                    if not doc_num:
-                        doc_num = nc_root or (ident.get("numeroControl") if isinstance(ident, dict) else None) or item.get("codigoGeneracion") or file_info["name"]
-                    
-                    gen_code = ident.get("codigoGeneracion") if isinstance(ident, dict) else (item.get("codigoGeneracion") or "N/A")
-                    resumen = item.get("resumen", {}) if isinstance(item.get("resumen"), {}) else {}
-                    
-                    val = resumen.get("totalGravada") or resumen.get("subTotal") or item.get("totalGravada") or 0.0
-                    iva = resumen.get("totalIva") or resumen.get("iva") or item.get("totalIva") or 0.0
-                    total = resumen.get("totalPagar") or resumen.get("montoTotalOperacion") or item.get("totalPagar") or 0.0
-                    
-                    try:
-                        val_f, iva_f, total_f = float(val), float(iva), float(total)
-                        if total_f == 0.0 and val_f > 0.0: total_f = val_f + iva_f
-                    except:
-                        val_f, iva_f, total_f = 0.0, 0.0, 0.0
-                        
-                    summary_data.append({
-                        "Código de Generación": str(gen_code),
-                        "Número de Control": str(doc_num),
-                        "Valor": val_f, "IVA": iva_f, "Total": total_f
-                    })
-            except Exception:
-                summary_data.append({"Código de Generación": "N/A", "Número de Control": file_info["name"], "Valor": 0.0, "IVA": 0.0, "Total": 0.0})
-    return pd.DataFrame(summary_data)
+    return {
+        "salario_quincenal": salario_quincenal_base,
+        "pago_diurnas": pago_diurnas,
+        "pago_nocturnas": pago_nocturnas,
+        "total_gravable": total_gravable,
+        "isss": isss,
+        "afp": afp,
+        "renta": renta,
+        "codigo_fiscal": codigo_fiscal,
+        "liquido": liquido
+    }
 
 # --- Inicialización de Estados de Sesión ---
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
@@ -180,10 +170,10 @@ def login_screen():
 
 # --- Panel de Administración ---
 def admin_dashboard():
-    st.title("🎛️ Panel de Control - Administrador")
+    st.title("🎛️ PANEL DE CONTROL - ADMINISTRADOR")
     st.markdown("Supervisa cumplimiento fiscal, documentos, notas aclaratorias y planillas de sueldos generadas.")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 Documentos y Notas", "💼 Auditoría de Planillas", "➕ Crear Usuario", "👥 Clientes"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 DOCUMENTOS Y NOTAS", "💼 AUDITORÍA DE PLANILLAS", "➕ CREAR USUARIO", "👥 CLIENTES"])
     
     with tab1:
         st.subheader("Control de Recepción de Documentos y Notas")
@@ -195,11 +185,11 @@ def admin_dashboard():
             
         periodo_seleccionado = f"{filtro_mes} {filtro_anio}"
         all_submissions = load_json_db(DB_FILE)
-        envios_periodo = [s for s in all_submissions if s["periodo"] == periodo_seleccionado]
+        envios_periodo = [s for s in all_submissions if filtro_mes in s["periodo"] and str(filtro_anio) in s["periodo"]]
         
         if envios_periodo:
             for idx, envio in enumerate(envios_periodo):
-                with st.expander(f"📁 {envio['client']} — Entregado el {envio['fecha']}"):
+                with st.expander(f"📁 {envio['client']} — Periodo: {envio['periodo']} — Entregado el {envio['fecha']}"):
                     if envio.get('notes'):
                         st.info(f"**📝 Notas / Aclaraciones del Cliente:**\n\n{envio['notes']}")
                     col_d1, col_d2 = st.columns(2)
@@ -219,22 +209,12 @@ def admin_dashboard():
             st.info(f"No hay documentos para {periodo_seleccionado}.")
 
     with tab2:
-        st.subheader("💼 Auditoría de Planillas Generadas por Clientes")
+        st.subheader("💼 Auditoría de Planillas Quincenales Generadas por Clientes")
         payrolls = load_json_db(PAYROLL_DB_FILE)
         if payrolls:
             for p_idx, payroll in enumerate(payrolls):
-                with st.expander(f"🏢 Empresa: {payroll['client_name']} — Periodo: {payroll['periodo']} (Creada: {payroll['fecha_creacion']})"):
+                with st.expander(f"🏢 EMPRESA: {payroll['client_name']} — PERIODO: {payroll['periodo']} (Creada: {payroll['fecha_creacion']})"):
                     df_p = pd.DataFrame(payroll['items'])
-                    
-                    total_c01 = df_p[df_p['Codigo_Fiscal'] == 'Código 01']['Renta'].sum()
-                    total_c60 = df_p[df_p['Codigo_Fiscal'] == 'Código 60']['Salario_Bruto'].sum()
-                    total_eventual = df_p[df_p['Codigo_Fiscal'] == 'Eventual 10%']['Renta'].sum()
-                    
-                    col_tot1, col_tot2, col_tot3 = st.columns(3)
-                    col_tot1.metric("Retenciones Código 01", f"${total_c01:,.2f}")
-                    col_tot2.metric("Base Empleados Código 60", f"${total_c60:,.2f}")
-                    col_tot3.metric("Retenciones Eventual 10%", f"${total_eventual:,.2f}")
-                    
                     st.dataframe(df_p, use_container_width=True)
         else:
             st.info("Aún no hay planillas generadas en el sistema por los clientes.")
@@ -253,24 +233,26 @@ def admin_dashboard():
                     st.warning("Complete todos los campos.")
 
     with tab4:
-        client_accounts = [{"Usuario ID": k, "Nombre": v["name"]} for k, v in st.session_state.clients_db.items() if v["role"] == "client"]
+        client_accounts = [{"USUARIO ID": k, "NOMBRE": v["name"]} for k, v in st.session_state.clients_db.items() if v["role"] == "client"]
         st.dataframe(pd.DataFrame(client_accounts), use_container_width=True)
 
 # --- Panel del Cliente ---
 def client_dashboard():
-    st.title(f"📁 Portal de Contribuyente — {st.session_state.username}")
-    st.markdown("Gestión documental, notas aclaratorias y generación de planillas fiscales.")
+    st.title(f"📁 PORTAL DE CONTRIBUYENTE — {st.session_state.username}")
+    st.markdown("Gestión documental, notas aclaratorias y generación de planillas fiscales quincenales.")
     
-    col_p1, col_p2 = st.columns(2)
+    col_p1, col_p2, col_p3 = st.columns(3)
     with col_p1:
         mes = st.selectbox("Mes Fiscal", ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"], index=5, key="c_mes")
     with col_p2:
         anio = st.selectbox("Año Fiscal", [2026, 2025], index=0, key="c_anio")
+    with col_p3:
+        quincena = st.selectbox("Quincena", ["Primera Quincena (Del 1 al 15)", "Segunda Quincena (Del 16 al 30/31)"], key="c_quincena")
         
-    periodo_str = f"{mes} {anio}"
+    periodo_str = f"{mes} {anio} — {quincena}"
     current_user_id = st.session_state.get("user_id", st.session_state.username)
     
-    client_tab1, client_tab2, client_tab3 = st.tabs(["📤 Carga Documental y Notas", "💼 Generador de Planillas", "📊 Historial y Resumen"])
+    client_tab1, client_tab2, client_tab3 = st.tabs(["📤 CARGA DOCUMENTAL Y NOTAS", "💼 GENERADOR DE PLANILLAS", "📊 HISTORIAL Y RESUMEN"])
     
     with client_tab1:
         with st.form("upload_form"):
@@ -310,8 +292,8 @@ def client_dashboard():
                     st.warning("Adjunte al menos un JSON principal.")
 
     with client_tab2:
-        st.subheader("💼 Mantenimiento de Personal y Generación de Planilla")
-        st.markdown("Mantén tu base histórica de empleados y emite tu planilla mensual con cálculos automáticos de Renta (**Código 01**, **Código 60** y **10% Eventual**).")
+        st.subheader("💼 Mantenimiento de Personal y Generación de Planilla Quincenal")
+        st.markdown("Mantén tu base histórica de empleados y emite tu planilla quincenal con cálculos automáticos de ISSS (3%), AFP (7.25%), horas extras diurnas (200%), nocturnas (225%) y renta quincenal.")
         
         all_emps = load_json_db(EMPLOYEE_DB_FILE)
         my_emps = [e for e in all_emps if e.get("user_id") == current_user_id]
@@ -322,7 +304,7 @@ def client_dashboard():
                 e_dui = st.text_input("DUI / Identificación")
                 e_salario = st.number_input("Salario Base Mensual ($)", min_value=0.0, value=500.0, step=10.0)
                 e_regimen = st.selectbox("Régimen de Retención de Renta", ["Cálculo por Tramos de Ley", "Exento / Código 60", "Renta Fija", "Eventual (10%)"])
-                e_fijo_val = st.number_input("Valor Renta Fija (Si aplica)", min_value=0.0, value=0.0)
+                e_fijo_val = st.number_input("Valor Renta Fija Quincenal (Si aplica)", min_value=0.0, value=0.0)
                 
                 if st.form_submit_button("Guardar Empleado"):
                     if e_nombre and e_dui:
@@ -340,56 +322,85 @@ def client_dashboard():
         if my_emps:
             st.markdown(f"**Empleados Registrados en Base Histórica ({len(my_emps)}):**")
             df_empleados = pd.DataFrame(my_emps)[['nombre', 'dui', 'salario_base', 'regimen']]
+            df_empleados.columns = ["NOMBRE", "DUI", "SALARIO BASE ($)", "RÉGIMEN"]
+            df_empleados["SALARIO BASE ($)"] = df_empleados["SALARIO BASE ($)"].apply(lambda x: f"${x:,.2f}")
             st.dataframe(df_empleados, use_container_width=True)
             
             st.markdown("---")
-            st.subheader(f"Generar Planilla para el Periodo: {periodo_str}")
-            if st.button("⚡ Calcular y Emitir Planilla del Mes", type="primary"):
-                planilla_items = []
-                for emp in my_emps:
-                    sal_base = emp['salario_base']
-                    regimen = emp['regimen']
-                    
-                    renta = calcular_renta_elsalvador(sal_base, regimen, emp.get('renta_fija', 0.0))
-                    
-                    if regimen == "Exento / Código 60" or (regimen == "Cálculo por Tramos de Ley" and sal_base <= 472.00):
-                        codigo_fiscal = "Código 60"
-                    elif regimen == "Eventual (10%)":
-                        codigo_fiscal = "Eventual 10%"
-                    else:
-                        codigo_fiscal = "Código 01"
-                        
-                    liquido = sal_base - renta
-                    
-                    planilla_items.append({
-                        "Empleado": emp['nombre'],
-                        "DUI": emp['dui'],
-                        "Salario_Bruto": sal_base,
-                        "Regimen": regimen,
-                        "Renta": round(renta, 2),
-                        "Codigo_Fiscal": codigo_fiscal,
-                        "Liquido_Pagar": round(liquido, 2)
-                    })
-                    
-                all_payrolls = load_json_db(PAYROLL_DB_FILE)
-                all_payrolls = [p for p in all_payrolls if not (p.get("user_id") == current_user_id and p.get("periodo") == periodo_str)]
+            st.subheader(f"Gestión de Planilla para el Periodo: {periodo_str}")
+            
+            all_payrolls = load_json_db(PAYROLL_DB_FILE)
+            existing_payroll = next((p for p in all_payrolls if p.get("user_id") == current_user_id and p.get("periodo") == periodo_str), None)
+            
+            if existing_payroll:
+                st.warning(f"⚠️ Ya existe una planilla generada y guardada para **{periodo_str}**.")
+                if st.button("🗑️ ELIMINAR / MODIFICAR PLANILLA ACTUAL", type="primary"):
+                    all_payrolls = [p for p in all_payrolls if not (p.get("user_id") == current_user_id and p.get("periodo") == periodo_str)]
+                    save_json_db(PAYROLL_DB_FILE, all_payrolls)
+                    st.success("Planilla eliminada. Ya puedes volver a generarla con los cambios necesarios.")
+                    st.rerun()
                 
-                new_payroll_record = {
-                    "user_id": current_user_id,
-                    "client_name": st.session_state.username,
-                    "periodo": periodo_str,
-                    "fecha_creacion": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "items": planilla_items
-                }
-                all_payrolls.append(new_payroll_record)
-                save_json_db(PAYROLL_DB_FILE, all_payrolls)
-                st.success("¡Planilla generada y enviada a RI Consultores exitosamente!")
-                st.rerun()
+                st.markdown("### DETALLE DE PLANILLA GUARDADA:")
+                st.dataframe(pd.DataFrame(existing_payroll['items']), use_container_width=True)
+            else:
+                with st.form("payroll_generation_form"):
+                    st.markdown("Ingrese las **Horas Extras Diurnas (200% / Dobles)** y **Horas Nocturnas (225%)** trabajadas en esta quincena:")
+                    
+                    emp_inputs = {}
+                    for emp in my_emps:
+                        sal_quincenal_base = emp['salario_base'] / 2.0
+                        st.markdown(f"**{emp['nombre']}** (Base Quincenal Estimada: **${sal_quincenal_base:,.2f}**)")
+                        col_h1, col_h2 = st.columns(2)
+                        with col_h1:
+                            h_diurnas = st.number_input(f"Hrs Diurnas 200% ({emp['dui']})", min_value=0.0, value=0.0, step=0.5, key=f"hd_{emp['dui']}")
+                        with col_h2:
+                            h_nocturnas = st.number_input(f"Hrs Nocturnas 225% ({emp['dui']})", min_value=0.0, value=0.0, step=0.5, key=f"hn_{emp['dui']}")
+                        emp_inputs[emp['dui']] = {"diurnas": h_diurnas, "nocturnas": h_nocturnas}
+                        st.divider()
+                    
+                    submitted_payroll = st.form_submit_button("⚡ CALCULAR Y EMITIR PLANILLA QUINCENAL", type="primary")
+                    if submitted_payroll:
+                        planilla_items = []
+                        for emp in my_emps:
+                            res = calcular_empleado_quincenal(
+                                emp['salario_base'],
+                                emp_inputs[emp['dui']]["diurnas"],
+                                emp_inputs[emp['dui']]["nocturnas"],
+                                emp['regimen'],
+                                emp.get('renta_fija', 0.0)
+                            )
+                            
+                            planilla_items.append({
+                                "EMPLEADO": emp['nombre'],
+                                "DUI": emp['dui'],
+                                "SALARIO QUINCENAL": f"${res['salario_quincenal']:,.2f}",
+                                "HRS DIURNAS (200%)": f"${res['pago_diurnas']:,.2f}",
+                                "HRS NOCTURNAS (225%)": f"${res['pago_nocturnas']:,.2f}",
+                                "TOTAL GRAVABLE": f"${res['total_gravable']:,.2f}",
+                                "ISSS (3%)": f"${res['isss']:,.2f}",
+                                "AFP (7.25%)": f"${res['afp']:,.2f}",
+                                "RÉGIMEN": emp['regimen'],
+                                "RENTA": f"${res['renta']:,.2f}",
+                                "CÓDIGO FISCAL": res['codigo_fiscal'],
+                                "LÍQUIDO A PAGAR": f"${res['liquido']:,.2f}"
+                            })
+                            
+                        new_payroll_record = {
+                            "user_id": current_user_id,
+                            "client_name": st.session_state.username,
+                            "periodo": periodo_str,
+                            "fecha_creacion": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "items": planilla_items
+                        }
+                        all_payrolls.append(new_payroll_record)
+                        save_json_db(PAYROLL_DB_FILE, all_payrolls)
+                        st.success("¡Planilla generada y emitida a RI Consultores exitosamente!")
+                        st.rerun()
         else:
             st.info("Registra al menos un empleado en la base histórica superior para poder generar la planilla.")
 
     with client_tab3:
-        st.subheader("📊 Historial de Envíos y Planillas del Periodo")
+        st.subheader("📊 Historial de Envíos y Planillas Quincenales")
         all_p = load_json_db(PAYROLL_DB_FILE)
         my_p = [p for p in all_p if p.get("user_id") == current_user_id]
         if my_p:
